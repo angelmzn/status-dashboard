@@ -1,14 +1,445 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hello World</title>
-  <link href='/style.css' rel='stylesheet'>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Employee Status Board</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, where, Timestamp, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    
+        const mainContent = document.getElementById('main-content');
+        const authPanel = document.getElementById('auth-panel');
+        const statusButtons = document.getElementById('status-buttons');
+        const userStatusDisplay = document.getElementById('user-status-display');
+        const othersStatusList = document.getElementById('others-status-list');
+        const userIdDisplay = document.getElementById('user-id-display');
+        const copyIdButton = document.getElementById('copy-id-button');
+        const managerPanel = document.getElementById('manager-panel');
+        const statusModal = document.getElementById('status-modal');
+        const notificationBanner = document.getElementById('notification-banner');
+        const notificationText = document.getElementById('notification-text');
+    
+        let appId;
+        let publicDataPath;
+        let userStatusCollectionPath;
+        let shiftConfigDocPath;
+    
+        let db;
+        let auth;
+        let userId = null;
+        let isAuthReady = false;
+        let unsubscribeStatus;
+        let unsubscribeShift;
+        let isManager = false;
+        let allUsers = [];
+        let shiftStart = null;
+        let shiftEnd = null;
+    
+        // Function to initialize Firebase and set up authentication
+        const setupFirebase = async () => {
+            if (!firebaseConfig.apiKey) {
+                console.error("Firebase config is missing. App cannot function.");
+                return;
+            }
+    
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+    
+                // Listen for authentication state changes
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        isAuthReady = true;
+                        console.log("User authenticated:", userId);
+                        await initializeUserDocument();
+                        startListeners();
+                        renderUI();
+                    } else {
+                        console.log("No user signed in. Attempting anonymous or custom token login.");
+                        try {
+                            if (initialAuthToken) {
+                                await signInWithCustomToken(auth, initialAuthToken);
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+                        } catch (error) {
+                            console.error("Authentication failed:", error);
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("Firebase initialization failed:", error);
+            }
+        };
+    
+        // Create or update the user's document in Firestore
+        const initializeUserDocument = async () => {
+            if (!isAuthReady) return;
+            const userDocRef = doc(db, userStatusCollectionPath, userId);
+            const userDocSnap = await getDoc(userDocRef);
+    
+            if (!userDocSnap.exists()) {
+                // For demonstration, the first user to log in becomes a manager
+                const existingUsersQuery = query(collection(db, userStatusCollectionPath));
+                const existingUsersSnap = await getDocs(existingUsersQuery);
+                isManager = existingUsersSnap.empty;
+    
+                await setDoc(userDocRef, {
+                    name: `User ${userId.substring(0, 4)}`,
+                    status: 'Offline',
+                    isManager: isManager,
+                    lastUpdated: Timestamp.now(),
+                    returnTime: null,
+                });
+            } else {
+                const userData = userDocSnap.data();
+                isManager = userData.isManager;
+            }
+        };
+    
+        // Set up real-time listeners for all users and shift data
+        const startListeners = () => {
+            if (!isAuthReady) return;
+    
+            // Listen for all user status changes
+            unsubscribeStatus = onSnapshot(collection(db, userStatusCollectionPath), (snapshot) => {
+                allUsers = [];
+                snapshot.forEach(doc => {
+                    allUsers.push({ id: doc.id, ...doc.data() });
+                });
+                renderStatusList();
+                checkTimedStatuses();
+            });
+    
+            // Listen for shift schedule changes
+            unsubscribeShift = onSnapshot(doc(db, shiftConfigDocPath), (docSnap) => {
+                if (docSnap.exists()) {
+                    const shiftData = docSnap.data();
+                    shiftStart = shiftData.start ? shiftData.start.toDate() : null;
+                    shiftEnd = shiftData.end ? shiftData.end.toDate() : null;
+                } else {
+                    shiftStart = null;
+                    shiftEnd = null;
+                }
+                updateShiftDisplay();
+            });
+        };
+    
+        // Render the main application UI
+        const renderUI = () => {
+            authPanel.classList.add('hidden');
+            mainContent.classList.remove('hidden');
+            userIdDisplay.textContent = `User ID: ${userId}`;
+            if (isManager) {
+                managerPanel.classList.remove('hidden');
+            }
+        };
+    
+        // Update the list of other users' statuses
+        const renderStatusList = () => {
+            const currentUser = allUsers.find(u => u.id === userId) || {};
+            userStatusDisplay.textContent = currentUser.status || 'Offline';
+    
+            othersStatusList.innerHTML = '';
+            const otherUsers = allUsers.filter(u => u.id !== userId);
+    
+            otherUsers.forEach(user => {
+                const li = document.createElement('li');
+                let returnTimeText = '';
+                if (user.returnTime && user.status !== 'Offline' && user.status !== 'Ready') {
+                    const now = new Date();
+                    const remainingMs = user.returnTime.toDate().getTime() - now.getTime();
+                    const remainingMins = Math.ceil(remainingMs / (1000 * 60));
+                    if (remainingMins > 0) {
+                        returnTimeText = ` - returning in ${remainingMins} min`;
+                    }
+                }
+                li.className = 'p-3 my-2 bg-slate-100 rounded-lg shadow-sm flex items-center justify-between transition-all duration-300 hover:bg-slate-200';
+                li.innerHTML = `
+                    <div class="flex items-center">
+                        <span class="w-2.5 h-2.5 rounded-full mr-2.5" style="background-color: ${getStatusColor(user.status)};"></span>
+                        <div class="font-medium text-slate-800">
+                            ${user.name || 'Anonymous User'}
+                            <span class="text-sm text-slate-500 font-normal ml-2">${user.isManager ? '(Manager)' : ''}</span>
+                        </div>
+                    </div>
+                    <div class="text-sm text-slate-600 font-semibold text-right">
+                        ${user.status}${returnTimeText}
+                    </div>
+                `;
+                othersStatusList.appendChild(li);
+            });
+        };
+    
+        // Check for timed statuses and revert them if necessary
+        const checkTimedStatuses = () => {
+            const currentUser = allUsers.find(u => u.id === userId);
+            if (currentUser && currentUser.returnTime && currentUser.returnTime.toDate().getTime() <= new Date().getTime()) {
+                changeStatus('Ready');
+            }
+        };
+    
+        // Change the user's status and update Firestore
+        const changeStatus = async (newStatus, duration = null) => {
+            if (!userId) return;
+    
+            const userDocRef = doc(db, userStatusCollectionPath, userId);
+            const now = Timestamp.now();
+            let returnTime = null;
+    
+            // Agent Readiness Check
+            const nowMs = now.toDate().getTime();
+            const isDuringShift = shiftStart && shiftEnd && (nowMs >= shiftStart.getTime() && nowMs <= shiftEnd.getTime());
+            const isGoingOffline = ['Break', 'Lunch', 'Follow Up'].includes(newStatus);
+            
+            if (isDuringShift && isGoingOffline) {
+                const readyAgents = allUsers.filter(u => u.status === 'Ready' && u.id !== userId);
+                if (readyAgents.length < 2) {
+                    const nonReadyUsers = allUsers.filter(u => ['Break', 'Lunch', 'Follow Up'].includes(u.status));
+                    const lowestRemainingMins = nonReadyUsers.reduce((min, user) => {
+                        if (user.returnTime) {
+                            const remaining = Math.ceil((user.returnTime.toDate().getTime() - nowMs) / (1000 * 60));
+                            return Math.min(min, remaining > 0 ? remaining : Infinity);
+                        }
+                        return min;
+                    }, Infinity);
+                    
+                    showNotification(`There are only ${readyAgents.length} agents in ready status, try again in ${lowestRemainingMins === Infinity ? 'a while' : lowestRemainingMins + ' minutes'}.`, 'bg-yellow-100 text-yellow-800');
+                    return;
+                }
+            }
+    
+            // If duration is provided (for Break, Lunch, Follow Up), calculate the return time
+            if (duration !== null && duration > 0) {
+                const returnTimestamp = now.toDate();
+                returnTimestamp.setMinutes(returnTimestamp.getMinutes() + parseInt(duration));
+                returnTime = Timestamp.fromDate(returnTimestamp);
+            }
+    
+            await setDoc(userDocRef, {
+                status: newStatus,
+                lastUpdated: now,
+                returnTime: returnTime,
+            }, { merge: true });
+    
+            // Hide the modal after a successful status change
+            statusModal.classList.add('hidden');
+        };
+    
+        // Show the duration modal for certain statuses
+        const showDurationModal = (status) => {
+            const modalTitle = document.getElementById('modal-title');
+            const durationInput = document.getElementById('duration-input');
+            const submitDurationButton = document.getElementById('submit-duration');
+    
+            modalTitle.textContent = `How many minutes for ${status}?`;
+            statusModal.classList.remove('hidden');
+            durationInput.focus();
+    
+            submitDurationButton.onclick = () => {
+                const duration = parseInt(durationInput.value) || 0;
+                changeStatus(status, duration);
+                durationInput.value = ''; // Reset input
+            };
+        };
+    
+        // Function to set the shift duration
+        const setShiftDuration = async () => {
+            const startInput = document.getElementById('shift-start');
+            const endInput = document.getElementById('shift-end');
+    
+            const startTime = new Date();
+            const [startHour, startMinute] = startInput.value.split(':').map(Number);
+            startTime.setHours(startHour, startMinute, 0, 0);
+    
+            const endTime = new Date();
+            const [endHour, endMinute] = endInput.value.split(':').map(Number);
+            endTime.setHours(endHour, endMinute, 0, 0);
+    
+            const shiftDocRef = doc(db, shiftConfigDocPath);
+            await setDoc(shiftDocRef, {
+                start: Timestamp.fromDate(startTime),
+                end: Timestamp.fromDate(endTime),
+            });
+    
+            showNotification('Shift schedule updated!', 'bg-green-100 text-green-800');
+        };
+    
+        // Update the shift time display for all users
+        const updateShiftDisplay = () => {
+            const shiftDisplay = document.getElementById('shift-display');
+            if (shiftStart && shiftEnd) {
+                const startStr = shiftStart.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+                const endStr = shiftEnd.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+                shiftDisplay.textContent = `Shift: ${startStr} to ${endStr}`;
+                shiftDisplay.classList.remove('hidden');
+            } else {
+                shiftDisplay.classList.add('hidden');
+            }
+        };
+    
+        // Helper to get a color for each status
+        const getStatusColor = (status) => {
+            switch (status) {
+                case 'Ready': return '#4CAF50'; // Green
+                case 'Break': return '#FFC107'; // Amber
+                case 'Lunch': return '#FF9800'; // Orange
+                case 'Follow Up': return '#2196F3'; // Blue
+                case 'Offline': return '#9E9E9E'; // Gray
+                default: return '#9E9E9E';
+            }
+        };
+    
+        // Show a temporary notification
+        const showNotification = (message, colorClass) => {
+            notificationText.textContent = message;
+            notificationBanner.className = `p-4 my-4 rounded-lg text-center font-semibold transition-all duration-300 ${colorClass}`;
+            notificationBanner.classList.remove('hidden');
+            setTimeout(() => {
+                notificationBanner.classList.add('hidden');
+            }, 5000);
+        };
+    
+        // Event listeners
+        document.addEventListener('DOMContentLoaded', () => {
+            // Global variables provided by the Canvas environment
+            appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+    
+            publicDataPath = `/artifacts/${appId}/public/data`;
+            userStatusCollectionPath = `${publicDataPath}/status_board`;
+            shiftConfigDocPath = `${publicDataPath}/config/shift`;
+    
+            // Fetch Firebase config and setup Firebase
+            fetch('/__/firebase/init.json').then(response => response.json()).then(firebaseConfig => setupFirebase(firebaseConfig));
+    
+            // Set up button click handlers
+            statusButtons.addEventListener('click', (e) => {
+                if (e.target.tagName === 'BUTTON') {
+                    const status = e.target.dataset.status;
+                    if (['Break', 'Lunch', 'Follow Up'].includes(status)) {
+                        showDurationModal(status);
+                    } else {
+                        changeStatus(status);
+                    }
+                }
+            });
+    
+            document.getElementById('set-shift-button').addEventListener('click', setShiftDuration);
+    
+            // Modal close button
+            document.getElementById('close-modal').addEventListener('click', () => {
+                statusModal.classList.add('hidden');
+            });
+    
+            // Copy user ID to clipboard
+            copyIdButton.addEventListener('click', () => {
+                if (userId) {
+                    const tempInput = document.createElement('input');
+                    document.body.appendChild(tempInput);
+                    tempInput.value = userId;
+                    tempInput.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(tempInput);
+                    showNotification('User ID copied to clipboard!', 'bg-gray-100 text-gray-800');
+                }
+            });
+    
+            // An interval to check for timed status reverts
+            setInterval(checkTimedStatuses, 60000);
+        });    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f4f7f9;
+        }
+    </style>
 </head>
-<body>
-  <h1>Hello, world!</h1>
-  <button onclick="console.log('hello');">Press me</button>
-  <script defer type="text/javascript" src="/main.js"></script>
+<body class="flex items-center justify-center min-h-screen p-4">
+
+    <!-- Authentication Panel (Hidden until auth is complete) -->
+    <div id="auth-panel" class="bg-white p-8 rounded-xl shadow-lg text-center max-w-sm w-full transition-all duration-300">
+        <h1 class="text-3xl font-bold text-slate-800 mb-4">Employee Status Board</h1>
+        <p class="text-slate-600">Please wait while we log you in...</p>
+        <svg class="animate-spin h-8 w-8 text-slate-500 mx-auto mt-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+    </div>
+
+    <!-- Main Content Panel -->
+    <div id="main-content" class="hidden bg-white p-8 rounded-xl shadow-lg w-full max-w-3xl transition-all duration-300">
+        <h1 class="text-3xl font-bold text-center text-slate-800 mb-2">Employee Status Board</h1>
+        <p id="shift-display" class="hidden text-center text-sm text-slate-500 mb-4"></p>
+        <div id="notification-banner" class="hidden rounded-lg p-4 my-4 font-semibold text-center transition-all duration-300">
+            <span id="notification-text"></span>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+            <!-- User Status Section -->
+            <div class="bg-slate-50 p-6 rounded-xl shadow-inner">
+                <h2 class="text-xl font-semibold text-slate-700 mb-4">Your Status</h2>
+                <div class="text-2xl font-bold text-center mb-6 py-4 rounded-xl shadow-sm border-2 border-slate-200">
+                    <span id="user-status-display">Offline</span>
+                </div>
+                <div id="status-buttons" class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <button data-status="Ready" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-lg transition-transform transform hover:scale-105 shadow-md">Ready</button>
+                    <button data-status="Break" class="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-3 px-4 rounded-lg transition-transform transform hover:scale-105 shadow-md">Break</button>
+                    <button data-status="Lunch" class="bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 px-4 rounded-lg transition-transform transform hover:scale-105 shadow-md">Lunch</button>
+                    <button data-status="Follow Up" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-lg transition-transform transform hover:scale-105 shadow-md">Follow Up</button>
+                    <button data-status="Offline" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-3 px-4 rounded-lg transition-transform transform hover:scale-105 shadow-md">Offline</button>
+                </div>
+                <div class="mt-6 flex items-center justify-center space-x-2 text-sm text-slate-500">
+                    <span id="user-id-display" class="font-mono bg-slate-100 p-2 rounded-lg"></span>
+                    <button id="copy-id-button" class="bg-slate-200 hover:bg-slate-300 p-2 rounded-lg transition-transform transform hover:scale-105" title="Copy User ID">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-slate-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Other Users Section -->
+            <div class="bg-slate-50 p-6 rounded-xl shadow-inner">
+                <h2 class="text-xl font-semibold text-slate-700 mb-4">Team Status</h2>
+                <ul id="others-status-list" class="space-y-3">
+                    <li class="p-3 my-2 bg-slate-100 rounded-lg shadow-sm text-center text-slate-500">Loading users...</li>
+                </ul>
+            </div>
+        </div>
+        
+        <!-- Manager Panel -->
+        <div id="manager-panel" class="hidden bg-red-50 p-6 rounded-xl shadow-inner border-2 border-red-200">
+            <h2 class="text-xl font-semibold text-red-700 mb-4">Manager Panel</h2>
+            <div class="flex flex-col sm:flex-row items-center space-y-4 sm:space-y-0 sm:space-x-4">
+                <div class="flex-grow w-full">
+                    <label for="shift-start" class="text-sm font-medium text-red-600 block mb-1">Shift Start</label>
+                    <input type="time" id="shift-start" class="w-full p-2 rounded-md border border-red-300 bg-white shadow-sm focus:border-red-500 focus:ring focus:ring-red-200 transition-all">
+                </div>
+                <div class="flex-grow w-full">
+                    <label for="shift-end" class="text-sm font-medium text-red-600 block mb-1">Shift End</label>
+                    <input type="time" id="shift-end" class="w-full p-2 rounded-md border border-red-300 bg-white shadow-sm focus:border-red-500 focus:ring focus:ring-red-200 transition-all">
+                </div>
+                <button id="set-shift-button" class="w-full sm:w-auto mt-4 sm:mt-0 bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-6 rounded-lg transition-transform transform hover:scale-105 shadow-md">Set Shift</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Duration Modal -->
+    <div id="status-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div class="bg-white p-8 rounded-xl shadow-xl max-w-md w-full relative">
+            <button id="close-modal" class="absolute top-3 right-3 text-gray-400 hover:text-gray-600 transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+            <h2 id="modal-title" class="text-xl font-bold text-center text-slate-800 mb-4"></h2>
+            <p class="text-sm text-center text-slate-500 mb-4">Enter a duration in minutes. Use 0 for indefinite.</p>
+            <input type="number" id="duration-input" placeholder="0" class="w-full p-3 mb-4 text-center text-lg rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+            <button id="submit-duration" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 rounded-lg transition-transform transform hover:scale-105 shadow-md">Update Status</button>
+        </div>
+    </div>
+
 </body>
 </html>

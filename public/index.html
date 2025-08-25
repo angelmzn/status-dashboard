@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Team Status Manager</title>
+    <style>
+        /* CSS for a clean, modern, and responsive design */
+        :root {
+            --primary-color: #007bff;
+            --secondary-color: #6c757d;
+            --success-color: #28a745;
+            --danger-color: #dc3545;
+            --warning-color: #ffc107;
+            --info-color: #17a2b8;
+            --light-bg: #f8f9fa;
+            --dark-bg: #343a40;
+            --ready-color: #28a745;
+            --break-color: #ffc107;
+            --lunch-color: #17a2b8;
+            --followup-color: #6f42c1;
+            --offline-color: #dc3545;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: var(--light-bg);
+            margin: 0;
+            padding: 20px;
+            color: var(--dark-bg);
+        }
+
+        .container {
+            max-width: 900px;
+            margin: auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+
+        h1, h2 {
+            text-align: center;
+            color: var(--primary-color);
+        }
+
+        .user-list {
+            display: grid;
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .user-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            transition: transform 0.2s;
+        }
+
+        .user-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .user-info {
+            flex-grow: 1;
+        }
+
+        .user-name {
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+
+        .user-status {
+            font-size: 1em;
+            font-style: italic;
+        }
+
+        .status-badge {
+            padding: 5px 10px;
+            border-radius: 20px;
+            color: #fff;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .status-ready { background-color: var(--ready-color); }
+        .status-break { background-color: var(--break-color); }
+        .status-lunch { background-color: var(--lunch-color); }
+        .status-follow-up { background-color: var(--followup-color); }
+        .status-offline { background-color: var(--offline-color); }
+
+        .status-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .status-button {
+            padding: 8px 15px;
+            border: none;
+            border-radius: 5px;
+            color: #fff;
+            cursor: pointer;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+
+        .btn-ready { background-color: var(--ready-color); }
+        .btn-break { background-color: var(--break-color); }
+        .btn-lunch { background-color: var(--lunch-color); }
+        .btn-follow-up { background-color: var(--followup-color); }
+        .btn-offline { background-color: var(--offline-color); }
+        .btn-remove { background-color: var(--danger-color); }
+
+        /* Modal for duration input */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.4);
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-content {
+            background-color: #fefefe;
+            padding: 20px;
+            border-radius: 8px;
+            width: 80%;
+            max-width: 400px;
+            text-align: center;
+        }
+
+        .modal-content input {
+            width: 80%;
+            padding: 8px;
+            margin-top: 10px;
+        }
+
+        .modal-content button {
+            margin-top: 15px;
+            padding: 10px 20px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            background-color: var(--primary-color);
+            color: #fff;
+        }
+
+        .add-user-section {
+            display: flex;
+            margin-top: 20px;
+            gap: 10px;
+        }
+
+        .add-user-section input {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+
+        .add-user-section button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            background-color: var(--success-color);
+            color: #fff;
+            cursor: pointer;
+        }
+
+        @media (max-width: 768px) {
+            .container { padding: 10px; }
+            .user-card { flex-direction: column; align-items: flex-start; }
+            .status-actions { margin-top: 10px; }
+        }
+    </style>
+    <script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-firestore.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Your Firebase config object
+            const firebaseConfig = {
+  apiKey: "AIzaSyBkW4TjFhVjTEpH9BuzibEXHUjmIY1dSjc",
+  authDomain: "manzanoa-pf-dev.firebaseapp.com",
+  projectId: "manzanoa-pf-dev",
+  storageBucket: "manzanoa-pf-dev.firebasestorage.app",
+  messagingSenderId: "596853193671",
+  appId: "1:596853193671:web:3bbd466d9273522868b7e2",
+  measurementId: "G-44GTT8DYX2"
+};
+
+            // Initialize Firebase
+            firebase.initializeApp(firebaseConfig);
+            const db = firebase.firestore();
+            const usersRef = db.collection('users');
+
+            let readyStatusCount = 0;
+
+            /**
+             * Renders the list of users and their status.
+             * @param {Array} users - Array of user objects from Firestore.
+             */
+            function renderUsers(users) {
+                const userList = document.getElementById('user-list');
+                userList.innerHTML = '';
+                readyStatusCount = users.filter(u => u.status === 'Ready').length;
+                users.forEach(user => {
+                    const card = document.createElement('div');
+                    card.className = 'user-card';
+                    card.dataset.id = user.id;
+
+                    let timeLeftText = '';
+                    if (user.status !== 'Ready' && user.status !== 'Offline' && user.duration > 0 && user.startTime) {
+                        const elapsed = (Date.now() - user.startTime) / 1000 / 60; // Minutes elapsed
+                        const timeLeft = Math.max(0, user.duration - elapsed);
+                        timeLeftText = ` (${Math.ceil(timeLeft)} min left)`;
+                    }
+
+                    card.innerHTML = `
+                        <div class="user-info">
+                            <div class="user-name">${user.name}</div>
+                            <div class="user-status">
+                                <span class="status-badge status-${user.status.toLowerCase().replace(' ', '-')}">${user.status}</span>
+                                ${timeLeftText}
+                            </div>
+                        </div>
+                        <div class="status-actions">
+                            <button class="status-button btn-ready" onclick="updateStatus('${user.id}', 'Ready')">Ready</button>
+                            <button class="status-button btn-break" onclick="showDurationModal('${user.id}', 'Break')">Break</button>
+                            <button class="status-button btn-lunch" onclick="showDurationModal('${user.id}', 'Lunch')">Lunch</button>
+                            <button class="status-button btn-follow-up" onclick="updateStatus('${user.id}', 'Follow Up')">Follow Up</button>
+                            <button class="status-button btn-offline" onclick="updateStatus('${user.id}', 'Offline')">Offline</button>
+                            <button class="status-button btn-remove" onclick="removeUser('${user.id}')">Remove</button>
+                        </div>
+                    `;
+                    userList.appendChild(card);
+                });
+            }
+
+            /**
+             * Adds a new user to the Firestore collection.
+             */
+            window.addUser = function() {
+                const userNameInput = document.getElementById('new-user-name');
+                const userName = userNameInput.value.trim();
+                if (userName) {
+                    usersRef.add({
+                        name: userName,
+                        status: 'Offline',
+                        duration: 0,
+                        startTime: null,
+                    }).then(() => {
+                        userNameInput.value = '';
+                    }).catch(error => {
+                        console.error("Error adding user: ", error);
+                    });
+                }
+            }
+
+            /**
+             * Removes a user from the Firestore collection.
+             * @param {string} userId - ID of the user to remove.
+             */
+            window.removeUser = function(userId) {
+                if (confirm('Are you sure you want to remove this user?')) {
+                    usersRef.doc(userId).delete().catch(error => {
+                        console.error("Error removing user: ", error);
+                    });
+                }
+            }
+
+            /**
+             * Displays the modal to get a duration for a status.
+             * @param {string} userId - ID of the user to update.
+             * @param {string} status - New status.
+             */
+            window.showDurationModal = function(userId, status) {
+                const minReadyAgents = parseInt(document.getElementById('min-ready-agents').value, 10);
+                // Agent readiness monitor check
+                if (['Break', 'Lunch'].includes(status) && readyStatusCount <= minReadyAgents) {
+                    usersRef.get().then(snapshot => {
+                        const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        const busyUsers = users.filter(u => u.status !== 'Ready' && u.status !== 'Offline');
+                        let minTimeLeft = Infinity;
+                        busyUsers.forEach(u => {
+                            const elapsed = (Date.now() - u.startTime) / 1000 / 60;
+                            const timeLeft = Math.max(0, u.duration - elapsed);
+                            if (timeLeft > 0 && timeLeft < minTimeLeft) {
+                                minTimeLeft = timeLeft;
+                            }
+                        });
+
+                        const message = `There are only ${readyStatusCount} agents in ready status, try again in ${Math.ceil(minTimeLeft)} minutes.`;
+                        alert(message);
+                    });
+                    return;
+                }
+
+                const modal = document.getElementById('duration-modal');
+                const durationInput = document.getElementById('duration-input');
+                const confirmBtn = document.getElementById('confirm-duration');
+                const modalTitle = document.getElementById('modal-title');
+
+                modalTitle.innerText = `Set duration for ${status}`;
+                confirmBtn.onclick = () => {
+                    const duration = parseInt(durationInput.value) || 0;
+                    updateStatus(userId, status, duration);
+                    modal.style.display = 'none';
+                    durationInput.value = '';
+                };
+
+                modal.style.display = 'flex';
+            }
+
+            /**
+             * Hides the duration modal.
+             */
+            window.hideDurationModal = function() {
+                document.getElementById('duration-modal').style.display = 'none';
+            }
+
+            /**
+             * Updates a user's status in Firestore.
+             * @param {string} userId - ID of the user to update.
+             * @param {string} newStatus - New status.
+             * @param {number} [duration=0] - Duration in minutes for timed statuses.
+             */
+            window.updateStatus = function(userId, newStatus, duration = 0) {
+                const userRef = usersRef.doc(userId);
+                
+                // Check for timed status
+                if (['Break', 'Lunch'].includes(newStatus) && duration > 0) {
+                    userRef.update({
+                        status: newStatus,
+                        duration: duration,
+                        startTime: Date.now()
+                    }).then(() => {
+                        setTimeout(() => {
+                            // Revert to Ready after duration
+                            userRef.get().then(doc => {
+                                if (doc.exists && doc.data().status === newStatus) {
+                                    userRef.update({
+                                        status: 'Ready',
+                                        duration: 0,
+                                        startTime: null,
+                                    });
+                                }
+                            });
+                        }, duration * 60 * 1000); // Minutes to milliseconds
+                    });
+                } else {
+                    userRef.update({
+                        status: newStatus,
+                        duration: 0,
+                        startTime: null,
+                    });
+                }
+            }
+
+            /**
+             * Watches for real-time updates from Firestore.
+             */
+            usersRef.onSnapshot(snapshot => {
+                const users = snapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+                renderUsers(users);
+            }, err => {
+                console.error('Real-time listener error:', err);
+            });
+        });
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>Team Status Manager</h1>
+        <div>
+            <label for="min-ready-agents">Minimum amount of Ready agents required: </label>
+            <input type="number" id="min-ready-agents" value="2" min="1">
+        </div>
+        <p>No sign-in required. Add a new user and manage their status.</p>
+        <hr>
+
+        <h2>Add New User</h2>
+        <div class="add-user-section">
+            <input type="text" id="new-user-name" placeholder="Enter employee name">
+            <button onclick="addUser()">Add User</button>
+        </div>
+        <hr>
+
+        <h2>Employee Status</h2>
+        <div id="user-list" class="user-list">
+            <p>Loading users...</p>
+        </div>
+    </div>
+
+    <div id="duration-modal" class="modal">
+        <div class="modal-content">
+            <h3 id="modal-title"></h3>
+            <p>Enter duration in minutes:</p>
+            <input type="number" id="duration-input" min="0" value="15">
+            <button id="confirm-duration">Set Status</button>
+            <button onclick="hideDurationModal()">Cancel</button>
+        </div>
+    </div>
+</body>
+</html>
